@@ -58,6 +58,10 @@ class SendMessageIn(BaseModel):
     mode: str = Field(default="chat", pattern=r"^(chat|quiz)$")
 
 
+class EditMessageIn(BaseModel):
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class AnswerMcqIn(BaseModel):
     selected_option: int = Field(ge=0, le=3)
 
@@ -313,3 +317,50 @@ def rename_conversation(
     db.commit()
     db.refresh(convo)
     return convo
+
+
+@router.delete("/conversations/{convo_id}", status_code=204)
+def delete_conversation(
+    convo_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    convo = _get_user_conversation(db, convo_id, current_user)
+    # messages cascade via the ORM relationship; quiz_sessions and
+    # conversation_materials cascade at the DB level (ondelete=CASCADE).
+    db.delete(convo)
+    db.commit()
+
+
+@router.post("/conversations/{convo_id}/messages/{message_id}/edit", response_model=List[MessageOut])
+def edit_message(
+    convo_id: UUID,
+    message_id: UUID,
+    payload: EditMessageIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Edit a user message: drop it and everything after it, then re-run the
+    turn with the new content (like editing a prompt in a chat app)."""
+    convo = _get_user_conversation(db, convo_id, current_user)
+    target = (
+        db.query(Message)
+        .filter(Message.id == message_id, Message.conversation_id == convo.id)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    role_value = target.role.value if hasattr(target.role, "value") else target.role
+    if role_value != "user":
+        raise HTTPException(status_code=400, detail="You can only edit your own messages")
+
+    # convo.messages is ordered (created_at, role); delete from the target onward
+    ordered = list(convo.messages)
+    start = next((i for i, m in enumerate(ordered) if m.id == target.id), None)
+    for m in ordered[start:]:
+        db.delete(m)
+    db.commit()
+
+    # regenerate by sending the edited content as a fresh chat turn
+    return send_message(convo_id, SendMessageIn(content=payload.content, mode="chat"), db, current_user)

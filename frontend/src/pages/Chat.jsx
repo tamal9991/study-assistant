@@ -27,6 +27,56 @@ export default function Chat() {
     const [renamingId, setRenamingId] = useState(null);
     const [renameValue, setRenameValue] = useState("");
 
+    // mobile drawers (sidebar + documents panel); ignored at md+ where both are static
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [docsOpen, setDocsOpen] = useState(false);
+
+    const openConvo = (id) => {
+        navigate(`/chat/${id}`);
+        setSidebarOpen(false);
+    };
+
+    // editing a previously-sent user message
+    const [editingId, setEditingId] = useState(null);
+    const [editValue, setEditValue] = useState("");
+    const [editSaving, setEditSaving] = useState(false);
+
+    const startEdit = (m) => {
+        setEditingId(m.id);
+        setEditValue(m.content);
+    };
+    const cancelEdit = () => {
+        setEditingId(null);
+        setEditValue("");
+    };
+    const submitEdit = async () => {
+        const content = editValue.trim();
+        if (!content || !activeConvo) return;
+        setEditSaving(true);
+        try {
+            await api.post(`/chat/conversations/${activeConvo.id}/messages/${editingId}/edit`, { content });
+            const { data } = await api.get(`/chat/conversations/${activeConvo.id}/messages`);
+            setMessages(data);
+            cancelEdit();
+            loadConversations();
+        } catch (err) {
+            alert(err.response?.data?.detail || "Edit failed");
+        } finally {
+            setEditSaving(false);
+        }
+    };
+
+    const deleteConvo = async (id) => {
+        if (!confirm("Delete this chat? This can't be undone.")) return;
+        try {
+            await api.delete(`/chat/conversations/${id}`);
+            await loadConversations();
+            if (conversationId === id) navigate("/chat", { replace: true });
+        } catch (err) {
+            alert(err.response?.data?.detail || "Delete failed");
+        }
+    };
+
     const prevConvoIdRef = useRef(null);
 
     // quiz launcher
@@ -101,6 +151,7 @@ export default function Chat() {
         const { data: convo } = await api.post("/chat/conversations", { title: "New chat" });
         await loadConversations();
         navigate(`/chat/${convo.id}`);
+        setSidebarOpen(false);
     };
 
     const startRename = (convo) => {
@@ -281,9 +332,22 @@ export default function Chat() {
         .toUpperCase();
 
     return (
-        <div className="h-screen flex bg-[#faf9f6]">
-            {/* SIDEBAR */}
-            <aside className="w-64 bg-black text-gray-100 flex flex-col">
+        <div className="h-screen flex bg-[#faf9f6] overflow-hidden">
+            {/* Mobile backdrop for the sidebar drawer */}
+            {sidebarOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-40 md:hidden"
+                    onClick={() => setSidebarOpen(false)}
+                />
+            )}
+
+            {/* SIDEBAR — static on md+, slide-in drawer on mobile */}
+            <aside
+                className={`bg-black text-gray-100 flex flex-col w-64 z-50
+                    fixed inset-y-0 left-0 transform transition-transform duration-200
+                    md:static md:translate-x-0
+                    ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}
+            >
                 <div className="px-4 py-5 border-b border-gray-800">
                     <div className="text-lg font-bold tracking-tight">📚 studybud</div>
                     <div className="text-xs text-gray-500 mt-0.5">your study buddy</div>
@@ -323,7 +387,7 @@ export default function Chat() {
                             ) : (
                                 <>
                                     <button
-                                        onClick={() => navigate(`/chat/${c.id}`)}
+                                        onClick={() => openConvo(c.id)}
                                         onDoubleClick={() => startRename(c)}
                                         className="flex-1 text-left text-sm px-3 py-2 truncate text-gray-200"
                                     >
@@ -331,10 +395,17 @@ export default function Chat() {
                                     </button>
                                     <button
                                         onClick={() => startRename(c)}
-                                        className="px-2 py-1 text-gray-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition mr-1"
+                                        className="px-1.5 py-1 text-gray-500 hover:text-white text-xs opacity-0 group-hover:opacity-100 transition"
                                         title="Rename"
                                     >
                                         ✎
+                                    </button>
+                                    <button
+                                        onClick={() => deleteConvo(c.id)}
+                                        className="px-1.5 py-1 text-gray-500 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition mr-1"
+                                        title="Delete"
+                                    >
+                                        🗑
                                     </button>
                                 </>
                             )}
@@ -359,6 +430,29 @@ export default function Chat() {
 
             {/* MAIN */}
             <main className="flex-1 flex flex-col min-w-0">
+                {/* Adaptive top bar:
+                    ☰ shows below md (sidebar is a drawer); the sidebar is static at md+.
+                    📎 shows below lg (documents is a drawer); the panel is static at lg+. */}
+                <header className="flex items-center gap-2 border-b border-gray-200 bg-white px-3 md:px-6 h-14 shrink-0">
+                    <button
+                        onClick={() => setSidebarOpen(true)}
+                        className="md:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 text-xl"
+                        aria-label="Open menu"
+                    >
+                        ☰
+                    </button>
+                    <div className="flex-1 font-semibold truncate">{activeConvo ? activeConvo.title : "📚 studybud"}</div>
+                    {activeConvo && (
+                        <button
+                            onClick={() => setDocsOpen(true)}
+                            className="lg:hidden w-9 h-9 flex items-center justify-center rounded-lg hover:bg-gray-100 text-lg"
+                            aria-label="Documents"
+                        >
+                            📎
+                        </button>
+                    )}
+                </header>
+
                 {!activeConvo ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center px-6">
                         <div className="text-5xl mb-3">📖</div>
@@ -367,12 +461,6 @@ export default function Chat() {
                     </div>
                 ) : (
                     <>
-                        <header className="border-b border-gray-200 bg-white">
-                            <div className="max-w-3xl mx-auto px-6 py-4">
-                                <div className="font-semibold truncate">{activeConvo.title}</div>
-                            </div>
-                        </header>
-
                         {uploadError && (
                             <div className="max-w-3xl mx-auto w-full px-6 mt-3">
                                 <div className="text-sm text-red-700 bg-red-50 border border-red-200 px-3 py-2 rounded-lg flex items-center justify-between">
@@ -397,13 +485,25 @@ export default function Chat() {
                                         📎 Use the <span className="font-medium">+</span> button to add a document.
                                     </div>
                                 )}
-                                {messages.map((m) => (
-                                    <MessageBubble
-                                        key={m.id}
-                                        msg={m}
-                                        navigate={navigate}
-                                    />
-                                ))}
+                                {messages.map((m) =>
+                                    editingId === m.id ? (
+                                        <EditMessageBox
+                                            key={m.id}
+                                            value={editValue}
+                                            onChange={setEditValue}
+                                            onSave={submitEdit}
+                                            onCancel={cancelEdit}
+                                            saving={editSaving}
+                                        />
+                                    ) : (
+                                        <MessageBubble
+                                            key={m.id}
+                                            msg={m}
+                                            navigate={navigate}
+                                            onEdit={m.role === "user" && !m.is_mcq ? () => startEdit(m) : null}
+                                        />
+                                    )
+                                )}
                                 {sending && <div className="text-gray-400 text-sm italic">studybud is thinking…</div>}
 
                                 {quizPhase !== "idle" && (
@@ -452,16 +552,17 @@ export default function Chat() {
                                 <button
                                     onClick={send}
                                     disabled={sending || !input.trim()}
-                                    className="bg-black hover:bg-gray-800 text-white rounded-lg px-4 py-2.5 font-medium disabled:opacity-50 transition"
+                                    className="bg-black hover:bg-gray-800 text-white rounded-lg px-3 sm:px-4 py-2.5 font-medium disabled:opacity-50 transition shrink-0"
                                 >
                                     Send
                                 </button>
                                 <button
                                     onClick={openQuizPicker}
                                     disabled={sending || quizPhase !== "idle"}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-4 py-2.5 font-medium disabled:opacity-50 transition"
+                                    title="Start quiz"
+                                    className="bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-3 sm:px-4 py-2.5 font-medium disabled:opacity-50 transition shrink-0"
                                 >
-                                    🎯 Start quiz
+                                    🎯<span className="hidden sm:inline"> Start quiz</span>
                                 </button>
                             </div>
                         </div>
@@ -469,12 +570,34 @@ export default function Chat() {
                 )}
             </main>
 
-            {/* RIGHT PANEL */}
+            {/* Backdrop for the documents drawer (phones + iPad portrait) */}
+            {activeConvo && docsOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                    onClick={() => setDocsOpen(false)}
+                />
+            )}
+
+            {/* RIGHT PANEL — static on lg+, slide-in drawer from the right below lg */}
             {activeConvo && (
-                <aside className="w-72 border-l border-gray-200 bg-white flex flex-col">
-                    <div className="px-4 py-4 border-b border-gray-200">
-                        <div className="text-sm font-semibold">📎 Documents</div>
-                        <div className="text-xs text-gray-500 mt-0.5">{activeConvo.materials?.length || 0} attached</div>
+                <aside
+                    className={`bg-white border-l border-gray-200 flex flex-col w-72 z-50
+                        fixed inset-y-0 right-0 transform transition-transform duration-200
+                        lg:static lg:translate-x-0
+                        ${docsOpen ? "translate-x-0" : "translate-x-full"}`}
+                >
+                    <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between">
+                        <div>
+                            <div className="text-sm font-semibold">📎 Documents</div>
+                            <div className="text-xs text-gray-500 mt-0.5">{activeConvo.materials?.length || 0} attached</div>
+                        </div>
+                        <button
+                            onClick={() => setDocsOpen(false)}
+                            className="lg:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-500 text-lg"
+                            aria-label="Close documents"
+                        >
+                            ✕
+                        </button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-3 space-y-2">
                         {(!activeConvo.materials || activeConvo.materials.length === 0) && (
@@ -667,7 +790,7 @@ function fileIcon(type) {
     return "📄";
 }
 
-function MessageBubble({ msg, navigate }) {
+function MessageBubble({ msg, navigate, onEdit }) {
     const isUser = msg.role === "user";
 
     // Quiz report — full
@@ -734,12 +857,58 @@ function MessageBubble({ msg, navigate }) {
     // Plain text
     return (
         <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-            <div className="max-w-2xl">
+            <div className="max-w-2xl group">
                 <div
                     className={`px-4 py-2.5 rounded-2xl whitespace-pre-wrap leading-relaxed
                          ${isUser ? "bg-black text-white rounded-br-md" : "bg-white border border-gray-200 text-gray-900 rounded-bl-md"}`}
                 >
                     {msg.content}
+                </div>
+                {isUser && onEdit && (
+                    <div className="flex justify-end mt-1">
+                        <button
+                            onClick={onEdit}
+                            className="text-xs text-gray-400 hover:text-black opacity-0 group-hover:opacity-100 transition"
+                        >
+                            edit
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function EditMessageBox({ value, onChange, onSave, onCancel, saving }) {
+    return (
+        <div className="flex justify-end">
+            <div className="max-w-2xl w-full">
+                <textarea
+                    autoFocus
+                    rows={3}
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    maxLength={4000}
+                    className="w-full border border-gray-300 rounded-2xl px-4 py-2.5 outline-none focus:ring-2 focus:ring-gray-400 resize-none"
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSave();
+                        if (e.key === "Escape") onCancel();
+                    }}
+                />
+                <div className="flex justify-end gap-2 mt-2">
+                    <button
+                        onClick={onCancel}
+                        className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:border-black transition"
+                    >
+                        cancel
+                    </button>
+                    <button
+                        onClick={onSave}
+                        disabled={saving || !value.trim()}
+                        className="text-sm px-3 py-1.5 rounded-lg bg-black text-white hover:bg-gray-800 disabled:opacity-50 transition"
+                    >
+                        {saving ? "sending…" : "save & send"}
+                    </button>
                 </div>
             </div>
         </div>
