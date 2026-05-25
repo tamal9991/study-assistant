@@ -149,7 +149,6 @@ class Message(Base, TimestampMixin):
     content = Column(Text, nullable=False)
     is_mcq = Column(Boolean, nullable=False, default=False)
     mcq_payload = Column(JSONB, nullable=True)
-    token_count = Column(Integer, nullable=True)
 
     conversation = relationship("Conversation", back_populates="messages")
     mcq_attempt = relationship("McqAttempt", back_populates="message", uselist=False, cascade="all, delete-orphan", passive_deletes=True)

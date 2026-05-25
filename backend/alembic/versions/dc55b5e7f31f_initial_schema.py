@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 525ab30fcc3a
+Revision ID: dc55b5e7f31f
 Revises: 
-Create Date: 2026-05-22 23:44:21.748922
+Create Date: 2026-05-25 22:42:32.407664
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '525ab30fcc3a'
+revision: str = 'dc55b5e7f31f'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -37,11 +37,23 @@ def upgrade() -> None:
     sa.UniqueConstraint('username')
     )
     op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+    op.create_table('conversations',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('title', sa.String(length=255), nullable=False),
+    sa.Column('last_message_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_conversations_user_last_message', 'conversations', ['user_id', 'last_message_at'], unique=False)
     op.create_table('materials',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('user_id', sa.UUID(), nullable=False),
     sa.Column('title', sa.String(length=255), nullable=False),
     sa.Column('source_text', sa.Text(), nullable=False),
+    sa.Column('file_type', sa.Enum('pdf', 'image', 'docx', 'text', name='file_type'), nullable=False),
     sa.Column('page_count', sa.Integer(), nullable=True),
     sa.Column('char_count', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -52,19 +64,14 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_materials_user_id_created_at', 'materials', ['user_id', 'created_at'], unique=False)
-    op.create_table('conversations',
-    sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('user_id', sa.UUID(), nullable=False),
+    op.create_table('conversation_materials',
+    sa.Column('conversation_id', sa.UUID(), nullable=False),
     sa.Column('material_id', sa.UUID(), nullable=False),
-    sa.Column('title', sa.String(length=255), nullable=False),
-    sa.Column('last_message_at', sa.DateTime(timezone=True), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('added_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['conversation_id'], ['conversations.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['material_id'], ['materials.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('conversation_id', 'material_id')
     )
-    op.create_index('ix_conversations_user_last_message', 'conversations', ['user_id', 'last_message_at'], unique=False)
     op.create_table('messages',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('conversation_id', sa.UUID(), nullable=False),
@@ -72,7 +79,6 @@ def upgrade() -> None:
     sa.Column('content', sa.Text(), nullable=False),
     sa.Column('is_mcq', sa.Boolean(), nullable=False),
     sa.Column('mcq_payload', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-    sa.Column('token_count', sa.Integer(), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.CheckConstraint('(is_mcq = false) OR (mcq_payload IS NOT NULL)', name='ck_messages_mcq_has_payload'),
@@ -80,6 +86,23 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_messages_conversation_created', 'messages', ['conversation_id', 'created_at'], unique=False)
+    op.create_table('quiz_sessions',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('user_id', sa.UUID(), nullable=False),
+    sa.Column('conversation_id', sa.UUID(), nullable=False),
+    sa.Column('total_questions', sa.Integer(), nullable=False),
+    sa.Column('correct_count', sa.Integer(), nullable=True),
+    sa.Column('questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('answers', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('report', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    sa.Column('submitted_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.ForeignKeyConstraint(['conversation_id'], ['conversations.id'], ondelete='CASCADE'),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_quiz_sessions_user', 'quiz_sessions', ['user_id', 'created_at'], unique=False)
     op.create_table('mcq_attempts',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('message_id', sa.UUID(), nullable=False),
@@ -100,16 +123,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_table('mcq_attempts')
+    op.drop_index('ix_quiz_sessions_user', table_name='quiz_sessions')
+    op.drop_table('quiz_sessions')
     op.drop_index('ix_messages_conversation_created', table_name='messages')
     op.drop_table('messages')
-    op.drop_index('ix_conversations_user_last_message', table_name='conversations')
-    op.drop_table('conversations')
+    op.drop_table('conversation_materials')
     op.drop_index('ix_materials_user_id_created_at', table_name='materials')
     op.drop_table('materials')
+    op.drop_index('ix_conversations_user_last_message', table_name='conversations')
+    op.drop_table('conversations')
     op.drop_index(op.f('ix_users_email'), table_name='users')
     op.drop_table('users')
     # ### end Alembic commands ###
-    # Drop the PostgreSQL enum type created implicitly by the 'messages' table.
-    # Alembic's autogenerate does not emit this, so a downgrade->upgrade cycle
-    # would otherwise fail with "type message_role already exists".
-    sa.Enum(name='message_role').drop(op.get_bind(), checkfirst=True)

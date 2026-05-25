@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/client";
 import { useAuth } from "../context/AuthContext";
 
@@ -9,7 +9,12 @@ const ALLOWED_EXT = ["pdf", "docx", "txt", "md", "png", "jpg", "jpeg", "webp"];
 export default function Chat() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
-    const location = useLocation();
+    const { conversationId } = useParams();
+
+    const handleLogout = () => {
+        logout();
+        navigate("/", { replace: true });
+    };
 
     const [conversations, setConversations] = useState([]);
     const [activeConvo, setActiveConvo] = useState(null);
@@ -39,58 +44,51 @@ export default function Chat() {
         api.get("/chat/conversations").then(({ data }) => setConversations(data));
     }, []);
 
-    // load data when activeConvo changes
+    // The URL (/chat/:conversationId) is the source of truth for which
+    // conversation is open, so a refresh restores the same page.
     useEffect(() => {
-        if (!activeConvo) return;
-        const id = activeConvo.id;
-        api.get(`/chat/conversations/${id}/messages`).then(({ data }) => setMessages(data));
-        api.get(`/chat/conversations/${id}`).then(({ data }) => setActiveConvo(data));
-    }, [activeConvo?.id]);
+        if (!conversationId) {
+            setActiveConvo(null);
+            setMessages([]);
+            return;
+        }
+        // Skip refetch if this conversation is already loaded (e.g. after an
+        // optimistic update like upload/rename set it directly).
+        if (activeConvo?.id === conversationId) return;
 
-    // reset quiz only when convo ID actually changes (not on object reference change)
+        let cancelled = false;
+        (async () => {
+            try {
+                const [{ data: convo }, { data: msgs }] = await Promise.all([
+                    api.get(`/chat/conversations/${conversationId}`),
+                    api.get(`/chat/conversations/${conversationId}/messages`),
+                ]);
+                if (cancelled) return;
+                setActiveConvo(convo);
+                setMessages(msgs);
+            } catch {
+                if (!cancelled) navigate("/chat", { replace: true });
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [conversationId]);
+
+    // reset quiz only when the conversation actually changes
     useEffect(() => {
-        const newId = activeConvo?.id || null;
+        const newId = conversationId || null;
         if (prevConvoIdRef.current !== newId) {
             prevConvoIdRef.current = newId;
             if (newId) {
                 cancelQuiz();
             }
         }
-    }, [activeConvo?.id]);
-
-    useEffect(() => {
-        const params = new URLSearchParams(location.search);
-        const wanted = params.get("convo");
-        if (!wanted) return;
-        (async () => {
-            try {
-                const [{ data: c }, { data: msgs }] = await Promise.all([api.get(`/chat/conversations/${wanted}`), api.get(`/chat/conversations/${wanted}/messages`)]);
-                setActiveConvo(c);
-                setMessages(msgs);
-                await loadConversations();
-            } catch {}
-            window.history.replaceState({}, "", "/chat");
-        })();
-    }, [location.search]);
+    }, [conversationId]);
 
     useEffect(() => {
         scrollRef.current?.scrollTo({ top: 9e9, behavior: "smooth" });
     }, [messages, quizPhase, quizProgress]);
-
-    useEffect(() => {
-        if (!activeConvo) return;
-        const hasPending = messages.some((m) => m.mcq_payload?.type === "quiz_report_pending");
-        if (!hasPending) return;
-        const interval = setInterval(async () => {
-            try {
-                const { data } = await api.get(`/chat/conversations/${activeConvo.id}/messages`);
-                setMessages(data);
-                const stillPending = data.some((m) => m.mcq_payload?.type === "quiz_report_pending");
-                if (!stillPending) clearInterval(interval);
-            } catch {}
-        }, 2000);
-        return () => clearInterval(interval);
-    }, [messages, activeConvo?.id]);
 
     useEffect(() => () => eventSourceRef.current?.close(), []);
 
@@ -102,8 +100,7 @@ export default function Chat() {
     const newChat = async () => {
         const { data: convo } = await api.post("/chat/conversations", { title: "New chat" });
         await loadConversations();
-        setActiveConvo(convo);
-        setMessages([]);
+        navigate(`/chat/${convo.id}`);
     };
 
     const startRename = (convo) => {
@@ -147,6 +144,7 @@ export default function Chat() {
         setUploading(true);
         try {
             let convo = activeConvo;
+            const isNewConvo = !convo;
             if (!convo) {
                 const { data } = await api.post("/chat/conversations", { title: "New chat" });
                 convo = data;
@@ -158,6 +156,7 @@ export default function Chat() {
             const { data: updated } = await api.post(`/chat/conversations/${convo.id}/materials`, { material_id: material.id });
             setActiveConvo(updated);
             await loadConversations();
+            if (isNewConvo) navigate(`/chat/${updated.id}`);
         } catch (err) {
             setUploadError(err.response?.data?.detail || "Upload failed");
         } finally {
@@ -306,7 +305,7 @@ export default function Chat() {
                         <div
                             key={c.id}
                             className={`group flex items-center rounded-lg transition
-                             ${activeConvo?.id === c.id ? "bg-gray-800" : "hover:bg-gray-900"}`}
+                             ${conversationId === c.id ? "bg-gray-800" : "hover:bg-gray-900"}`}
                         >
                             {renamingId === c.id ? (
                                 <input
@@ -324,7 +323,7 @@ export default function Chat() {
                             ) : (
                                 <>
                                     <button
-                                        onClick={() => setActiveConvo(c)}
+                                        onClick={() => navigate(`/chat/${c.id}`)}
                                         onDoubleClick={() => startRename(c)}
                                         className="flex-1 text-left text-sm px-3 py-2 truncate text-gray-200"
                                     >
@@ -516,7 +515,7 @@ export default function Chat() {
                 <SettingsModal
                     user={user}
                     onClose={() => setSettingsOpen(false)}
-                    onLogout={logout}
+                    onLogout={handleLogout}
                 />
             )}
         </div>
@@ -670,24 +669,6 @@ function fileIcon(type) {
 
 function MessageBubble({ msg, navigate }) {
     const isUser = msg.role === "user";
-
-    // Quiz report — pending state
-    if (msg.mcq_payload?.type === "quiz_report_pending") {
-        return (
-            <div className="max-w-2xl bg-black text-white rounded-2xl p-5">
-                <div className="text-xs uppercase tracking-wider text-emerald-400 mb-1">Quiz submitted</div>
-                <div className="flex items-baseline gap-3">
-                    <div className="text-4xl font-bold">
-                        {msg.mcq_payload.correct_count}/{msg.mcq_payload.total_questions}
-                    </div>
-                </div>
-                <div className="text-gray-300 mt-3 text-sm flex items-center gap-2">
-                    <span className="inline-block w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-                    analyzing your weak topics…
-                </div>
-            </div>
-        );
-    }
 
     // Quiz report — full
     if (msg.mcq_payload?.type === "quiz_report") {

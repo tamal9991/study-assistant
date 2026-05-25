@@ -3,7 +3,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -194,98 +194,10 @@ def get_quiz(
     )
 
 
-def _generate_report_background(session_id: str, conversation_id: str):
-    """Background task — generates the LLM report and upgrades the placeholder message."""
-    try:
-        with SessionLocal() as db:
-            qs = db.query(QuizSession).filter(QuizSession.id == session_id).first()
-            if not qs:
-                print(f"[bg] quiz session {session_id} not found")
-                return
-
-            per_question = []
-            for q, selected in zip(qs.questions, qs.answers):
-                per_question.append({
-                    "question": q["question"],
-                    "topic": q.get("topic", "general"),
-                    "options": q["options"],
-                    "selected": selected,
-                    "correct": q["correct_option"],
-                    "is_correct": selected == q["correct_option"],
-                })
-
-            source = "\n\n".join(f"=== {m.title} ===\n{m.source_text}" for m in qs.conversation.materials)
-
-            try:
-                print(f"[bg] generating report for {session_id}")
-                report = generate_report(per_question, source_text=source)
-                print(f"[bg] got report: {len(report.get('weak_topics', []))} weak, "
-                      f"{len(report.get('strong_topics', []))} strong")
-            except Exception as e:
-                print(f"[bg] generate_report failed: {e}")
-                report = {
-                    "summary": f"Scored {qs.correct_count}/{qs.total_questions}.",
-                    "weak_topics": [],
-                    "strong_topics": [],
-                    "overall_score": f"{qs.correct_count}/{qs.total_questions}",
-                }
-
-            qs.report = report
-
-            full_payload = {
-                "type": "quiz_report",
-                "quiz_session_id": str(qs.id),
-                "correct_count": qs.correct_count,
-                "total_questions": qs.total_questions,
-                "report": report,
-            }
-
-            # find placeholder among recent messages (avoid fragile JSONB queries)
-            recent = (
-                db.query(Message)
-                .filter(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at.desc())
-                .limit(10)
-                .all()
-            )
-            placeholder = None
-            for msg in recent:
-                if (msg.mcq_payload
-                        and msg.mcq_payload.get("type") == "quiz_report_pending"
-                        and msg.mcq_payload.get("quiz_session_id") == session_id):
-                    placeholder = msg
-                    break
-
-            if placeholder:
-                print(f"[bg] upgrading placeholder {placeholder.id}")
-                placeholder.content = f"Quiz report — {qs.correct_count}/{qs.total_questions} correct"
-                placeholder.mcq_payload = full_payload
-            else:
-                print("[bg] no placeholder found, inserting new message")
-                new_msg = Message(
-                    conversation_id=conversation_id,
-                    role=MessageRole.assistant,
-                    content=f"Quiz report — {qs.correct_count}/{qs.total_questions} correct",
-                    is_mcq=False,
-                    mcq_payload=full_payload,
-                )
-                db.add(new_msg)
-
-            qs.conversation.last_message_at = datetime.now(timezone.utc)
-            db.commit()
-            print(f"[bg] done for {session_id}")
-
-    except Exception as e:
-        import traceback
-        print(f"[bg] FATAL: {e}")
-        traceback.print_exc()
-
-
 @router.post("/{session_id}/submit", response_model=QuizReportOut)
 def submit_quiz(
     session_id: UUID,
     payload: QuizSubmitIn,
-    background: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -298,7 +210,7 @@ def submit_quiz(
         if not (0 <= a <= 3):
             raise HTTPException(status_code=400, detail="Each answer must be 0..3")
 
-    # score immediately
+    # score
     per_question = []
     correct_count = 0
     for q, selected in zip(qs.questions, payload.answers):
@@ -318,30 +230,29 @@ def submit_quiz(
     qs.correct_count = correct_count
     qs.submitted_at = datetime.now(timezone.utc)
 
-    # placeholder message for instant feedback
-    placeholder = Message(
+    # Generate the report inline. generate_report is time-bounded and falls back
+    # to a local summary, so this returns promptly and never hangs — no polling.
+    source = "\n\n".join(f"=== {m.title} ===\n{m.source_text}" for m in qs.conversation.materials)
+    report = generate_report(per_question, source_text=source)
+    qs.report = report
+
+    # one finished assistant message carrying the full report
+    db.add(Message(
         conversation_id=qs.conversation_id,
         role=MessageRole.assistant,
-        content=f"Scored {correct_count}/{qs.total_questions}. Generating your report…",
+        content=f"Quiz report — {correct_count}/{qs.total_questions} correct",
         is_mcq=False,
         mcq_payload={
-            "type": "quiz_report_pending",
+            "type": "quiz_report",
             "quiz_session_id": str(qs.id),
             "correct_count": correct_count,
             "total_questions": qs.total_questions,
+            "report": report,
         },
-    )
-    db.add(placeholder)
+    ))
     qs.conversation.last_message_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(qs)
-
-    # generate report in background — response returns instantly
-    background.add_task(
-        _generate_report_background,
-        str(qs.id),
-        str(qs.conversation_id),
-    )
 
     return QuizReportOut(
         id=qs.id,
@@ -349,7 +260,7 @@ def submit_quiz(
         total_questions=qs.total_questions,
         correct_count=correct_count,
         submitted_at=qs.submitted_at,
-        report={},
+        report=report,
         per_question=per_question,
     )
 

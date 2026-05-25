@@ -43,7 +43,7 @@ export default function Quiz() {
     setSubmitting(true); setError('')
     try {
       await api.post(`/quiz/${sessionId}/submit`, { answers: ordered })
-      navigate(`/chat?convo=${session.conversation_id}`, { replace: true })
+      navigate(`/chat/${session.conversation_id}`, { replace: true })
     } catch (err) {
       setError(err.response?.data?.detail || 'Submit failed')
     } finally {
@@ -73,7 +73,7 @@ export default function Quiz() {
           </div>
         </div>
         {isReview ? (
-          <button onClick={() => navigate(`/chat?convo=${session.conversation_id}`)}
+          <button onClick={() => navigate(`/chat/${session.conversation_id}`)}
                   className="text-sm text-gray-300 hover:text-white">
             ← back to chat
           </button>

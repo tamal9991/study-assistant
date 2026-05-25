@@ -20,28 +20,59 @@ def _trim(text: str) -> str:
 
 
 def _extract_json(raw: str) -> str:
+    """Pull the first balanced JSON value (object or array) out of an LLM reply.
+
+    Picks whichever of '{' or '[' appears first, then scans to its matching
+    close while respecting string literals. This avoids the old array-first
+    regex, which mangled objects that contain nested arrays (e.g. the quiz
+    report's weak_topics / strong_topics lists).
+    """
     raw = raw.strip()
+    # strip ```json ... ``` / ``` ... ``` fences
     if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.lower().startswith("json"):
-            raw = raw[4:]
-    # try array first, then object
-    array_match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if array_match:
-        return array_match.group(0)
-    obj_match = re.search(r"\{.*\}", raw, re.DOTALL)
-    return obj_match.group(0) if obj_match else raw
+        raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw).strip()
+
+    starts = [i for i in (raw.find("{"), raw.find("[")) if i != -1]
+    if not starts:
+        return raw
+    start = min(starts)
+    open_ch = raw[start]
+    close_ch = "}" if open_ch == "{" else "]"
+
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(raw)):
+        c = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == open_ch:
+            depth += 1
+        elif c == close_ch:
+            depth -= 1
+            if depth == 0:
+                return raw[start:i + 1]
+    return raw[start:]
 
 
-def _llm_call(system: str, user: str, max_tokens: int = 1024) -> str:
+def _llm_call(system: str, user: str, max_tokens: int = 1024, timeout: int = 30, retries: int = 3) -> str:
     last_err = None
-    for attempt in range(3):
+    for attempt in range(retries):
         try:
             resp = client.chat.completions.create(
                 model=MODEL,
                 max_tokens=max_tokens,
                 temperature=0.5,
-                timeout=30,
+                timeout=timeout,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
@@ -50,13 +81,13 @@ def _llm_call(system: str, user: str, max_tokens: int = 1024) -> str:
             return resp.choices[0].message.content or ""
         except APIStatusError as e:
             last_err = e
-            if e.status_code == 429 and attempt < 2:
+            if e.status_code == 429 and attempt < retries - 1:
                 time.sleep(5)
                 continue
             raise
         except (APITimeoutError, APIConnectionError) as e:
             last_err = e
-            if attempt < 2:
+            if attempt < retries - 1:
                 time.sleep(2)
                 continue
             raise
@@ -128,23 +159,23 @@ def generate_report(quiz_results: list[dict], source_text: str = "") -> dict:
     system = build_prompt("report", source_text=_trim(source_text))
     user = json.dumps({"results": quiz_results}, ensure_ascii=False)
 
-    last_err = None
-    for attempt in range(2):
-        try:
-            raw = _llm_call(system, user, max_tokens=1024)
-            cleaned = _extract_json(raw)
-            data = json.loads(cleaned)
+    # Single bounded attempt: the report is generated inline on quiz submit, so
+    # we cap the wait (~20s) and fall back to a local summary rather than
+    # retrying for minutes against a flaky model.
+    try:
+        raw = _llm_call(system, user, max_tokens=1024, timeout=20, retries=1)
+        cleaned = _extract_json(raw)
+        data = json.loads(cleaned)
 
-            assert isinstance(data.get("summary"), str)
-            assert isinstance(data.get("weak_topics"), list)
-            assert isinstance(data.get("strong_topics"), list)
-            assert isinstance(data.get("overall_score"), str)
-            return data
-        except Exception as e:
-            last_err = e
-            continue
+        assert isinstance(data.get("summary"), str)
+        assert isinstance(data.get("weak_topics"), list)
+        assert isinstance(data.get("strong_topics"), list)
+        assert isinstance(data.get("overall_score"), str)
+        return data
+    except Exception:
+        pass
 
-    # fallback — synthesize a basic report locally if LLM keeps failing
+    # fallback — synthesize a basic report locally if the LLM fails
     total = len(quiz_results)
     correct = sum(1 for r in quiz_results if r["is_correct"])
     return {
