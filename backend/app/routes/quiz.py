@@ -1,4 +1,5 @@
 import json
+import re
 from uuid import UUID
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -16,6 +17,14 @@ router = APIRouter(prefix="/quiz", tags=["quiz"])
 
 ALLOWED_SIZES = {5, 10, 20}
 BATCH_SIZE = 5
+# stop generating if this many consecutive batches add no new (non-duplicate) questions
+MAX_STAGNANT_BATCHES = 3
+
+
+def _norm_question(q: str) -> str:
+    """Normalize a question for duplicate detection across quizzes:
+    lowercase, collapse whitespace, drop trailing punctuation."""
+    return re.sub(r"\s+", " ", (q or "").strip().lower()).rstrip("?.! ")
 
 
 class QuizGenerateIn(BaseModel):
@@ -117,9 +126,14 @@ def stream_quiz_generation(
     def event_stream():
         try:
             all_mcqs = []
+            # seen holds normalized question text from every earlier quiz in this
+            # conversation plus everything generated so far — used to guarantee no
+            # repeats across the 2nd, 3rd, … quiz.
+            seen = {_norm_question(q) for q in past_questions if q}
             previous = list(past_questions)
             remaining = size
             batch_num = 0
+            stagnant = 0
             total_batches = (size + BATCH_SIZE - 1) // BATCH_SIZE
 
             while remaining > 0:
@@ -139,14 +153,29 @@ def stream_quiz_generation(
                         return
                     break
 
-                all_mcqs.extend(batch)
-                previous.extend([m["question"] for m in batch])
-                remaining -= len(batch)
+                # hard dedup — drop any question already used in this or a prior quiz
+                fresh = []
+                for m in batch:
+                    key = _norm_question(m.get("question", ""))
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    fresh.append(m)
 
-                if len(batch) == 0:
-                    break
+                all_mcqs.extend(fresh)
+                previous.extend([m["question"] for m in fresh])
+                remaining -= len(fresh)
 
-                last_topic = batch[-1]["topic"]
+                # guard: if the model keeps returning only duplicates/nothing new,
+                # stop after a few stagnant rounds rather than looping forever.
+                if not fresh:
+                    stagnant += 1
+                    if stagnant >= MAX_STAGNANT_BATCHES:
+                        break
+                    continue
+                stagnant = 0
+
+                last_topic = fresh[-1]["topic"]
                 yield (
                     f"event: progress\n"
                     f"data: {json.dumps({'current': len(all_mcqs), 'total': size, 'topic': last_topic})}\n\n"

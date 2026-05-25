@@ -120,7 +120,7 @@ def generate_mcq_batch(source_text: str, n: int, previous_questions: list[str] =
     """Batch MCQ generation — used by quiz page."""
     avoid = ""
     if previous_questions:
-        avoid = "Don't repeat these previous questions:\n- " + "\n- ".join(previous_questions[-10:])
+        avoid = "Don't repeat these previous questions:\n- " + "\n- ".join(previous_questions[-25:])
     system = build_prompt("quiz_batch", source_text=_trim(source_text), extras=avoid)
 
     last_err = None
