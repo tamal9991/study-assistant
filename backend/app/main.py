@@ -1,4 +1,9 @@
-from fastapi import FastAPI, Depends
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import auth as auth_routes
@@ -9,7 +14,18 @@ from app.deps import get_current_user
 from app.models import User
 from app.schemas import UserOut
 
-app = FastAPI(title="Study Assistant API")
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.upgrade(cfg, "head")
+    yield
+
+
+app = FastAPI(title="Study Assistant API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
