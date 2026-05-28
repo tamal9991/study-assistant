@@ -24,14 +24,15 @@ modern-project/
 
 ## Before you start (install these)
 
-| Tool             | Why you need it          | Get it                                             |
-| ---------------- | ------------------------ | -------------------------------------------------- |
-| Python 3.11+     | runs the backend         | https://www.python.org/downloads/                  |
-| Node.js 18+      | runs the frontend        | https://nodejs.org                                 |
-| PostgreSQL 14+   | stores your data         | https://www.postgresql.org/download/               |
-| OpenRouter key   | powers the AI            | https://openrouter.ai/keys (free models available) |
+| Tool           | Why you need it   | Get it                                             |
+| -------------- | ----------------- | -------------------------------------------------- |
+| Python 3.11+   | runs the backend  | https://www.python.org/downloads/                  |
+| Node.js 18+    | runs the frontend | https://nodejs.org                                 |
+| PostgreSQL 14+ | stores your data  | https://www.postgresql.org/download/               |
+| OpenRouter key | powers the AI     | https://openrouter.ai/keys (free models available) |
 
 **Optional:** if you want to upload **image** files, install Tesseract OCR:
+
 - macOS: `brew install tesseract`
 - Windows: download the installer from https://github.com/UB-Mannheim/tesseract/wiki
 
@@ -83,12 +84,14 @@ cd backend
 **Create a virtual environment** (keeps Python packages tidy):
 
 macOS / Linux:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
 Windows (PowerShell):
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -103,11 +106,13 @@ pip install -r requirements.txt
 **Set up your environment file.** Copy the example, then open `.env` and fill it in:
 
 macOS / Linux:
+
 ```bash
 cp .env.example .env
 ```
 
 Windows (PowerShell):
+
 ```powershell
 copy .env.example .env
 ```
@@ -121,6 +126,7 @@ OPENROUTER_API_KEY=<your OpenRouter key>
 ```
 
 Need a `JWT_SECRET`? Run this and paste the output:
+
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
@@ -165,6 +171,7 @@ you don't need to configure anything else.
 Once everything is installed, you only need two terminals:
 
 **Terminal 1 — backend:**
+
 ```bash
 cd backend
 source .venv/bin/activate      # Windows: .venv\Scripts\Activate.ps1
@@ -172,6 +179,7 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 **Terminal 2 — frontend:**
+
 ```bash
 cd frontend
 npm run dev
@@ -181,14 +189,14 @@ npm run dev
 
 ## Settings (.env explained)
 
-| Variable             | Required? | What it is                                                |
-| -------------------- | --------- | --------------------------------------------------------- |
-| `DATABASE_URL`       | ✅ yes    | how to connect to your Postgres database                  |
-| `JWT_SECRET`         | ✅ yes    | secret used to keep you logged in securely                |
-| `JWT_ALGORITHM`      | optional  | defaults to `HS256`                                       |
-| `JWT_EXPIRE_MINUTES` | optional  | how long a login lasts (default 1440 = 1 day)             |
-| `OPENROUTER_API_KEY` | ✅ yes    | your AI key                                               |
-| `OPENROUTER_MODEL`   | optional  | which AI model to use                                     |
+| Variable             | Required? | What it is                                    |
+| -------------------- | --------- | --------------------------------------------- |
+| `DATABASE_URL`       | ✅ yes    | how to connect to your Postgres database      |
+| `JWT_SECRET`         | ✅ yes    | secret used to keep you logged in securely    |
+| `JWT_ALGORITHM`      | optional  | defaults to `HS256`                           |
+| `JWT_EXPIRE_MINUTES` | optional  | how long a login lasts (default 1440 = 1 day) |
+| `OPENROUTER_API_KEY` | ✅ yes    | your AI key                                   |
+| `OPENROUTER_MODEL`   | optional  | which AI model to use                         |
 
 ---
 
