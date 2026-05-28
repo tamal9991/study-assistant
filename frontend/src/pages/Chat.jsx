@@ -288,7 +288,7 @@ export default function Chat() {
         setQuizError("");
 
         const token = localStorage.getItem("token");
-        const url = `/api/quiz/stream?conversation_id=${activeConvo.id}&size=${quizSize}&token=${encodeURIComponent(token)}`;
+        const url = `${import.meta.env.VITE_API_URL}/quiz/stream?conversation_id=${activeConvo.id}&size=${quizSize}&token=${encodeURIComponent(token)}`;
         const es = new EventSource(url);
         eventSourceRef.current = es;
 
